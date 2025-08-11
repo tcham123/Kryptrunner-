@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dash & Dodge</title>
+<style>
+  :root {
+    --bg: #0b0f1a;
+    --fg: #e6edf3;
+    --accent: #6ee7ff;
+    --accent2: #9b5cff;
+    --danger: #ff4d6d;
+    --ok: #7ef29a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: radial-gradient(1200px 800px at 50% 0%, #111933 0%, var(--bg) 60%);
+    color: var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, sans-serif;
+  }
+  #wrap {
+    display: grid; place-items: center; min-height: 100vh; padding: 16px;
+  }
+  #gamebox {
+    position: relative; width: min(92vw, 720px); aspect-ratio: 9 / 16; border-radius: 16px;
+    overflow: hidden; box-shadow: 0 6px 40px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.06);
+    background: linear-gradient(180deg, rgba(255,255,255,.02), rgba(0,0,0,.2));
+  }
+  canvas { width: 100%; height: 100%; display: block; }
+  #hud {
+    position: absolute; inset: 0; pointer-events: none; padding: 10px;
+    display: grid; grid-template-rows: auto 1fr auto;
+  }
+  .topbar { display:flex; justify-content:space-between; gap:10px; font-weight:600; text-shadow: 0 2px 6px rgba(0,0,0,.6); }
+  .chip {
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08);
+    padding: 6px 10px; border-radius: 999px; display:flex; align-items:center; gap:.5rem; pointer-events:auto;
+    backdrop-filter: blur(6px);
+  }
+  #msg {
+    place-self: center; text-align: center; pointer-events: auto; display:none;
+  }
+  #msg h1 { margin: 0 0 8px; font-size: clamp(22px, 5vw, 34px); }
+  #msg p { margin: 0 0 14px; opacity:.9 }
+  #msg .btnrow { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+  button {
+    background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+    color: var(--fg); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 14px; font-weight:600;
+    cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.35); transition: transform .05s ease, background .2s;
+  }
+  button:hover { transform: translateY(-1px); }
+  .kbd { font-variant: tabular-nums; opacity:.9 }
+  #touch {
+    position: absolute; inset: 0; display:grid; grid-template-columns:1fr 1fr; pointer-events:none;
+  }
+  .touchBtn {
+    pointer-events:auto; user-select:none; touch-action: manipulation;
+    display:flex; align-items:flex-end; justify-content:center; padding: 16px;
+  }
+  .touchBtn > div {
+    width: 68px; height: 68px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05);
+    display:grid; place-items:center; font-weight:800; text-shadow:0 2px 6px rgba(0,0,0,.5);
+  }
+  .badge { font-weight:700; color: var(--accent); }
+  .shield { color: var(--ok) }
+  .danger { color: var(--danger) }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="gamebox">
+    <canvas id="c" width="540" height="960" aria-label="Dash & Dodge game area"></canvas>
+
+    <div id="hud" aria-live="polite">
+      <div class="topbar">
+        <div class="chip" id="scoreChip">Score: <span id="score">0</span></div>
+        <div class="chip">Best: <span id="best">0</span></div>
+        <div class="chip" id="statusChip">Speed: <span id="spd">1.0</span></div>
+        <button class="chip" id="pauseBtn" title="Pause (P)" aria-label="Pause">⏸ Pause</button>
+        <button class="chip" id="muteBtn" title="Mute (M)" aria-label="Mute">🔊 Sound</button>
+      </div>
+
+      <div id="msg">
+        <h1 id="title">Dash & Dodge</h1>
+        <p id="subtitle">Move to dodge hazards, snag <span class="badge">orbs</span> for points, and pick up <span class="shield">shields</span>. Difficulty rises over time.</p>
+        <p class="kbd">Controls: ← → (A/D) · Hold to dash · <strong>P</strong> pause · <strong>R</strong> restart</p>
+        <div class="btnrow">
+          <button id="playBtn">▶ Play</button>
+          <button id="restartBtn" style="display:none">↻ Restart</button>
+        </div>
+      </div>
+
+      <div class="topbar" style="align-items:end">
+        <div class="chip">Orbs: <span id="orbs">0</span></div>
+        <div class="chip">Shields: <span id="shields">0</span></div>
+        <div class="chip">Hazards: <span id="hz">0</span></div>
+      </div>
+    </div>
+
+    <div id="touch" aria-hidden="false">
+      <div class="touchBtn" id="leftTouch"><div>←</div></div>
+      <div class="touchBtn" id="rightTouch"><div>→</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // DOM
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const spdEl = document.getElementById('spd');
+  const orbsEl = document.getElementById('orbs');
+  const shieldsEl = document.getElementById('shields');
+  const hzEl = document.getElementById('hz');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const muteBtn = document.getElementById('muteBtn');
+  const msg = document.getElementById('msg');
+  const title = document.getElementById('title');
+  const subtitle = document.getElementById('subtitle');
+  const playBtn = document.getElementById('playBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const leftTouch = document.getElementById('leftTouch');
+  const rightTouch = document.getElementById('rightTouch');
+
+  // State
+  let running = false, paused = false, over = false;
+  let tLast = 0, score = 0, best = +localStorage.getItem('dd_best') || 0;
+  let speed = 1, baseSpeed = 1, difficulty = 1;
+  let orbs = 0, hazards = 0, shields = 0, shieldTimer = 0;
+  let muted = false;
+
+  // Player
+  const player = {
+    x: W/2, y: H*0.82, r: 16, vx: 0, ax: 0, maxV: 7, friction: 0.85,
+  };
+
+  // Entities
+  const ents = [];
+  const particles = [];
+
+  // Utilities
+  const rand = (a,b) => a + Math.random()*(b-a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const chance = p => Math.random() < p;
+
+  // Audio (tiny bleeps)
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const beep = (freq=440, dur=0.08, type='sine', vol=0.2) => {
+    if (muted) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.value = vol;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start();
+    o.stop(audioCtx.currentTime + dur);
+  };
+
+  // Spawners
+  let spawnTimer = 0, orbTimer = 0, shieldSpawnTimer = 0;
+  function spawnHazard(){
+    const size = rand(20, 44);
+    const x = rand(size, W - size);
+    ents.push({ kind:'hazard', x, y:-size, r:size*0.5, vy: rand(3, 5)*speed, rot: rand(0, Math.PI*2), vr: rand(-0.05, 0.05) });
+    hazards++;
+  }
+  function spawnOrb(){
+    const x = rand(14, W - 14);
+    ents.push({ kind:'orb', x, y:-16, r:10, vy: rand(2.5, 4)*speed });
+  }
+  function spawnShield(){
+    const x = rand(18, W - 18);
+    ents.push({ kind:'shield', x, y:-16, r:12, vy: rand(2.5, 4)*speed });
+  }
+
+  // Particles
+  function puff(x,y,cnt=10,col='rgba(255,255,255,0.9)'){
+    for (let i=0;i<cnt;i++){
+      particles.push({
+        x, y,
+        vx: rand(-2,2), vy: rand(-2.5, -0.5),
+        life: rand(18,28), col
+      });
+    }
+  }
+
+  function reset(){
+    running = false; paused = false; over = false;
+    score = 0; orbs = 0; hazards = 0; shields = 0; shieldTimer = 0;
+    speed = baseSpeed = 1; difficulty = 1;
+    player.x = W/2; player.vx = 0; player.ax = 0;
+    ents.length = 0; particles.length = 0;
+    spawnTimer = orbTimer = shieldSpawnTimer = 0;
+    updateHUD();
+    showMessage(true);
+  }
+
+  function start(){
+    running = true; over = false; paused = false;
+    hideMessage();
+    tLast = performance.now();
+    audioCtx.resume?.();
+    requestAnimationFrame(loop);
+  }
+
+  function gameOver(){
+    over = true; running = false;
+    if (score > best) { best = score; localStorage.setItem('dd_best', best); }
+    title.textContent = 'Game Over';
+    subtitle.innerHTML = `Score: <strong>${score}</strong> · Best: <strong>${best}</strong><br>Press <b>R</b> or tap Restart.`;
+    showMessage(true);
+    restartBtn.style.display = 'inline-block';
+    beep(220, .15, 'sawtooth', 0.15);
+  }
+
+  function showMessage(show=true){ msg.style.display = show ? 'block' : 'none'; }
+  function hideMessage(){ msg.style.display = 'none'; }
+
+  function updateHUD(){
+    scoreEl.textContent = Math.floor(score);
+    bestEl.textContent = best;
+    spdEl.textContent = speed.toFixed(1);
+    orbsEl.textContent = orbs;
+    shieldsEl.textContent = shields + (shieldTimer>0 ? ' ⏱' : '');
+    hzEl.textContent = hazards;
+    pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+    muteBtn.textContent = muted ? '🔇 Muted' : '🔊 Sound';
+  }
+
+  // Input
+  const keys = {};
+  window.addEventListener('keydown', (e)=>{
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === 'ArrowLeft') keys['a'] = true;
+    if (e.key === 'ArrowRight') keys['d'] = true;
+    if (e.key.toLowerCase() === 'p'){ paused = !paused; updateHUD(); if (!paused) tLast = performance.now(); }
+    if (e.key.toLowerCase() === 'm'){ muted = !muted; updateHUD(); }
+    if (e.key.toLowerCase() === 'r' && over){ reset(); start(); }
+    if ((e.key === ' ' || e.key === 'Enter') && !running){ start(); }
+  });
+  window.addEventListener('keyup', (e)=>{
+    keys[e.key.toLowerCase()] = false;
+    if (e.key === 'ArrowLeft') keys['a'] = false;
+    if (e.key === 'ArrowRight') keys['d'] = false;
+  });
+
+  // Touch
+  let touchL = false, touchR = false;
+  const press = (side, on)=>{ if(side==='L') touchL = on; else touchR = on; };
+  ['pointerdown','pointerenter'].forEach(ev=>{
+    leftTouch.addEventListener(ev, ()=>press('L', true));
+    rightTouch.addEventListener(ev, ()=>press('R', true));
+  });
+  ['pointerup','pointerleave','pointercancel','pointerout'].forEach(ev=>{
+    leftTouch.addEventListener(ev, ()=>press('L', false));
+    rightTouch.addEventListener(ev, ()=>press('R', false));
+  });
+
+  pauseBtn.addEventListener('click', ()=>{ paused = !paused; updateHUD(); if(!paused) tLast = performance.now(); });
+  muteBtn.addEventListener('click', ()=>{ muted = !muted; updateHUD(); });
+  playBtn.addEventListener('click', ()=> start());
+  restartBtn.addEventListener('click', ()=>{ reset(); start(); });
+
+  // Drawing helpers
+  function drawPlayer(){
+    const r = player.r;
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.beginPath();
+    ctx.arc(0,0,r,0,Math.PI*2);
+    ctx.closePath();
+    const grad = ctx.createRadialGradient(0,0,4,0,0,r);
+    grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+    grad.addColorStop(1, 'rgba(159,199,255,0.7)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // dash trail
+    const vx = player.vx;
+    if (Math.abs(vx) > 2){
+      ctx.globalAlpha = 0.25;
+      ctx.fillRect(-r - vx*1.2, -r*0.2, r*2.2, r*0.4);
+      ctx.globalAlpha = 1;
+    }
+
+    if (shieldTimer > 0){
+      ctx.beginPath();
+      ctx.arc(0,0,r+6,0,Math.PI*2);
+      ctx.strokeStyle = 'rgba(126,242,154,0.9)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawHazard(h){
+    ctx.save();
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.rot);
+    ctx.beginPath();
+    const r = h.r;
+    ctx.moveTo(-r, -r*0.6);
+    ctx.lineTo(r, -r*0.6);
+    ctx.lineTo(r*0.5, r);
+    ctx.lineTo(-r*0.5, r);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(-r,-r,r,r);
+    grad.addColorStop(0,'rgba(255,77,109,0.9)');
+    grad.addColorStop(1,'rgba(255,136,164,0.8)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawOrb(o){
+    ctx.save();
+    ctx.translate(o.x, o.y);
+    ctx.beginPath();
+    ctx.arc(0,0,o.r,0,Math.PI*2);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(110,231,255,0.9)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawShield(s){
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.beginPath();
+    ctx.arc(0,0,s.r,0,Math.PI*2);
+    ctx.strokeStyle = 'rgba(126,242,154,0.95)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawParticles(){
+    for (const p of particles){
+      ctx.globalAlpha = Math.max(0, p.life/30);
+      ctx.fillStyle = p.col;
+      ctx.fillRect(p.x, p.y, 2, 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function loop(t){
+    if (!running) return;
+    const dt = Math.min(32, t - tLast); // clamp
+    tLast = t;
+
+    if (paused){ requestAnimationFrame(loop); return; }
+
+    // Logic
+    const accel = 0.8 + difficulty*0.05;
+    const left = keys['a'] || touchL;
+    const right = keys['d'] || touchR;
+
+    player.ax = (left? -accel : 0) + (right? accel : 0);
+    player.vx = clamp(player.vx*player.friction + player.ax, -player.maxV, player.maxV);
+    player.x = clamp(player.x + player.vx, player.r, W - player.r);
+
+    // Difficulty scales with time
+    score += 0.02 * (1 + difficulty*0.3) * (dt/16.67);
+    baseSpeed = 1 + Math.min(2.5, (t/1000)/25); // up to +2.5 over ~25s
+    speed = baseSpeed;
+    difficulty = 1 + (t/1000)/10; // increases steadily
+    if (shieldTimer > 0) shieldTimer -= dt;
+
+    // Spawning
+    spawnTimer -= dt; orbTimer -= dt; shieldSpawnTimer -= dt;
+    if (spawnTimer <= 0){ spawnHazard(); spawnTimer = 500/Math.sqrt(difficulty) + rand(-120, 80); }
+    if (orbTimer <= 0){ spawnOrb(); orbTimer = 650/Math.sqrt(difficulty) + rand(-140, 120); }
+    if (shieldSpawnTimer <= 0 && chance(0.06)){ spawnShield(); shieldSpawnTimer = 5000 + rand(-1200, 900); }
+
+    // Update entities
+    for (let i=ents.length-1;i>=0;i--){
+      const e = ents[i];
+      e.y += e.vy * (dt/16.67);
+      if (e.rot !== undefined) e.rot += e.vr;
+
+      // offscreen cleanup
+      if (e.y - (e.r||10) > H){ ents.splice(i,1); continue; }
+
+      // collisions
+      const dx = e.x - player.x, dy = e.y - player.y;
+      const rr = (e.r + player.r);
+      if (dx*dx + dy*dy < rr*rr){
+        if (e.kind === 'orb'){
+          orbs++; score += 5; puff(e.x,e.y,12,'rgba(110,231,255,0.9)'); beep(760,.07,'triangle',0.12);
+          ents.splice(i,1); continue;
+        }
+        if (e.kind === 'shield'){
+          shields++; shieldTimer = 8000; puff(e.x,e.y,10,'rgba(126,242,154,0.9)'); beep(540,.09,'square',0.12);
+          ents.splice(i,1); continue;
+        }
+        if (e.kind === 'hazard'){
+          if (shieldTimer > 0){
+            // consume shield
+            shieldTimer = Math.max(0, shieldTimer - 2500);
+            puff(e.x,e.y,18,'rgba(255,77,109,0.9)'); beep(340,.06,'sawtooth',0.1);
+            ents.splice(i,1); continue;
+          } else {
+            puff(player.x, player.y, 36, 'rgba(255,77,109,0.95)');
+            gameOver();
+            break;
+          }
+        }
+      }
+    }
+
+    // Update particles
+    for (let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--;
+      if (p.life <= 0) particles.splice(i,1);
+    }
+
+    // Render
+    ctx.clearRect(0,0,W,H);
+
+    // background starfield
+    ctx.globalAlpha = 0.6;
+    for (let y=0; y<H; y+=24){
+      const offset = (t/60 + y*0.6) % 24;
+      for (let x=0; x<W; x+=24){
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect((x+offset)%W, y, 2, 2);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // lanes
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 2;
+    for (let i=1;i<4;i++){
+      const x = (W/4) * i;
+      ctx.beginPath();
+      ctx.moveTo(x,0); ctx.lineTo(x,H);
+      ctx.stroke();
+    }
+
+    // entities
+    for (const e of ents){
+      if (e.kind === 'hazard') drawHazard(e);
+      else if (e.kind === 'orb') drawOrb(e);
+      else if (e.kind === 'shield') drawShield(e);
+    }
+
+    drawPlayer();
+    drawParticles();
+    updateHUD();
+
+    if (!over) requestAnimationFrame(loop);
+  }
+
+  // Init
+  bestEl.textContent = best;
+  reset();
+})();
+</script>
+</body>
+</html>
